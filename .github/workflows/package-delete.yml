@@ -1,0 +1,23 @@
+name: Delete Package
+permissions: read-all
+on:
+  workflow_dispatch:
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # This is used to complete the identity challenge
+      # with sigstore/fulcio when running outside of PRs.
+      id-token: write
+    steps:
+      - uses: snok/container-retention-policy@v2
+        with:
+          image-names: ofscraper
+          cut-off: two hours ago UTC+2
+          timestamp-to-use: updated_at
+          account-type: personal
+          keep-at-least: 10
+          skip-tags: latest,1.*
+          token: ${{ secrets.DOCKER_DELETE}}
