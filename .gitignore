@@ -1,0 +1,69 @@
+# --- Standard Python Artifacts ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging / Build artifacts
+build/
+dist/
+sdist/
+wheels/
+*.egg-info/
+*.egg
+MANIFEST
+*.spec # Keep .spec files if they are manually edited, ignore if auto-generated.
+       # Yours look like configuration, so I've commented this out.
+       # *.spec
+
+# PyInstaller temporary files
+# *.manifest # Already covered by standard rules if needed
+
+# Installer logs & Test reports
+pip-log.txt
+pip-delete-this-directory.txt
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# This is the 'info/' directory in your project
+/info/
+# Also include other common venv names
+.venv/
+venv/
+env/
+ENV/
+
+# Editor & IDE-specific files
+.vscode/
+.idea/
+.spyderproject
+.ropeproject
+
+# mypy cache
+.mypy_cache/
+
+# Custom generated files or logs
+*.log
+# Ignoring a custom compiled/encrypted version file
+ofscraper/__version__.pye
+
+/crypto/
+
+# Ignore specific generated files if they appear
+# dupe.json
+.tempmedia/
+
+#trunk
+.trunk
+#documentation
+wiki/
+docs/
