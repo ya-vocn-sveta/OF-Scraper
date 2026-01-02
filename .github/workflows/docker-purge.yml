@@ -1,0 +1,35 @@
+name: Docker Purge
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *" # every day at midnight
+permissions: read-all
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # This is used to complete the identity challenge
+      # with sigstore/fulcio when running outside of PRs.
+      id-token: write
+
+    steps:
+      - name: Main purger
+        uses: snok/container-retention-policy@v2
+        with:
+          image-names: of-scraper
+          timestamp-to-use: created_at
+          account-type: personal
+          token: ${{ secrets.DOCKER_DELETE}}
+          filter-tags: sha*
+          cut-off: 1 second ago UTC
+      - name: Delete untagged
+        uses: snok/container-retention-policy@v2
+        with:
+          image-names: of-scraper
+          cut-off: 1 second ago UTC
+          account-type: personal
+          token: ${{ secrets.DOCKER_DELETE}}
+          untagged-only: true
