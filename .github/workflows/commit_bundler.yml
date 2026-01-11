@@ -1,0 +1,207 @@
+name: Build and Package
+
+on:
+  push:
+    branches:
+      - '**'
+    tags-ignore:
+      - '**'
+
+permissions:
+  contents: read # Required for git checkout and gh CLI to read workflow runs
+
+jobs:
+  generate_version:
+    name: Generate Version Info
+    runs-on: ubuntu-latest
+    env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+      sanitized_version: ${{ steps.version.outputs.SANITIZED_VERSION }}
+      short_hash: ${{ steps.version.outputs.SHORT_HASH }}
+      long_hash: ${{ steps.version.outputs.LONG_HASH }}
+      commit_timestamp: ${{ steps.version.outputs.COMMIT_TIMESTAMP }}
+      base_version: ${{ steps.version.outputs.BASE_VERSION }}
+      push_type: ${{ steps.version.outputs.PUSH_TYPE }}
+      is_newer_than_last_successful_run: ${{ steps.version.outputs.IS_NEWER_THAN_LAST_SUCCESSFUL_RUN }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Essential for git merge-base to compare full history
+          fetch-tags: true
+      
+      - name: Make script executable
+        run: chmod +x ./scripts/commit_version.sh
+      - name: Generate Version and Git Info
+        id: version # This step runs your commit_version.sh script
+        # Pass GitHub Actions context variables as environment variables to the script
+        run: ./scripts/commit_version.sh
+
+  build_binaries:
+    name: Build on ${{ matrix.os }}
+    needs: [generate_version]
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false # <-- ADDED: Allows all OS builds to complete even if one fails
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            artifact_suffix: linux
+            shell: bash
+          - os: windows-latest
+            artifact_suffix: windows
+            shell: pwsh
+          - os: macos-latest
+            artifact_suffix: macos
+            shell: bash
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12.0
+      - name: Install uv
+        uses: astral-sh/setup-uv@v1
+
+      - name: Set Version Environment Variables
+        shell: bash
+        run: |
+          echo "HATCH_VCS_PRETEND_VERSION=${{ needs.generate_version.outputs.version }}" >> $GITHUB_ENV
+
+      - name: Install Dependencies and Build Tools
+        shell: bash
+        run: |
+          uv venv
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            . .venv/Scripts/activate
+          else
+            source .venv/bin/activate
+          fi
+          uv sync --verbose --extra ffmpeg --extra dev
+
+      - name: Set UTF-8 environment (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          echo "PYTHONUTF8=1" >> $env:GITHUB_ENV
+          echo "PYTHONLEGACYWINDOWSSTDIO=utf8" >> $env:GITHUB_ENV
+        shell: pwsh
+
+      - name: Build Executable using Spec Files (One-File)
+        id: build_onefile
+        shell: bash
+        continue-on-error: true # <-- ADDED: Allows this step to fail without stopping this OS matrix axis
+        run: |
+          SANITIZED_VERSION="${{ needs.generate_version.outputs.sanitized_version }}"
+          EXE_NAME="ofscraper_${{ matrix.artifact_suffix }}_${SANITIZED_VERSION}"
+          
+          if [ "${{ runner.os }}" == "Windows" ]; then
+              source .venv/Scripts/activate
+              EXE_EXT=".exe"
+          else
+              source .venv/bin/activate
+              EXE_EXT=""
+          fi
+          
+          echo "Building one-file executable from specs/onefile.spec..."
+          pyinstaller specs/onefile.spec
+          mv dist/ofscraper_file${EXE_EXT} dist/${EXE_NAME}${EXE_EXT}
+          echo "one_file_path=dist/${EXE_NAME}${EXE_EXT}" >> $GITHUB_OUTPUT
+          echo "one_file_name=${EXE_NAME}${EXE_EXT}" >> $GITHUB_OUTPUT
+
+      - name: Upload One-File Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build_onefile.outputs.one_file_name }}
+          path: ${{ steps.build_onefile.outputs.one_file_path }}
+          if-no-files-found: ignore # Ensures upload step doesn't fail if previous build step failed
+
+      - name: Build and Zip One-Dir Bundle
+        id: build_onedir_zip
+        shell: bash
+        continue-on-error: true # Already present: Allows this step to fail without stopping this OS matrix axis
+        run: |
+          SANITIZED_VERSION="${{ needs.generate_version.outputs.sanitized_version }}"
+          DIR_NAME="ofscraper_${{ matrix.artifact_suffix }}_dir"
+          ZIP_NAME="ofscraper_${{ matrix.artifact_suffix }}_${SANITIZED_VERSION}.zip"
+
+          if [ "${{ runner.os }}" == "Windows" ]; then
+              source .venv/Scripts/activate
+          else
+              source .venv/bin/activate
+          fi
+
+          echo "Building one-dir bundle from specs/onedir.spec..."
+          pyinstaller specs/onedir.spec
+          mv dist/ofscraper_dir dist/${DIR_NAME}
+
+          echo "Zipping one-dir build..."
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            powershell -Command "Compress-Archive -Path dist/${DIR_NAME} -DestinationPath dist/${ZIP_NAME} -Force"
+          else
+            zip -r "dist/${ZIP_NAME}" "dist/${DIR_NAME}"
+          fi
+          echo "zip_path=dist/${ZIP_NAME}" >> $GITHUB_OUTPUT
+          echo "zip_name=${ZIP_NAME}" >> $GITHUB_OUTPUT
+          echo "dir_path=dist/${DIR_NAME}" >> $GITHUB_OUTPUT
+          echo "dir_name=dist/${DIR_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Upload Zipped One-Dir Artifact
+        if: success() && steps.build_onedir_zip.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build_onedir_zip.outputs.zip_name }}
+          path: ${{ steps.build_onedir_zip.outputs.zip_path }}
+          if-no-files-found: ignore # Ensures upload step doesn't fail if previous build step failed
+
+      - name: Upload One-Dir Folder (if zip failed)
+        if: failure() && steps.build_onedir_zip.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build_onedir_zip.outputs.dir_name }}
+          path: ${{ steps.build_onedir_zip.outputs.dir_path }}
+          if-no-files-found: ignore # Ensures upload step doesn't fail if previous build step failed
+
+  publish_release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && !contains(github.ref, 'refs/tags/')
+    needs: [build_binaries, generate_version] # Waits for version info AND all binary builds to complete (even partially)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to create/update GitHub Releases
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          # No specific `if-no-files-found` here on download-artifact, it will download what's available
+          # and log warnings for missing ones by default.
+
+      - name: List downloaded files for debugging
+        run: ls -R artifacts
+
+      - name: Create or Update Release
+        uses: ncipollo/release-action@v1.17.0
+
+        with:
+          artifacts: artifacts/*/* # Attach any downloaded artifacts (will include only those that were built successfully)
+          # Combined tag for uniqueness and chronological sorting
+          tag: "${{ needs.generate_version.outputs.base_version }}+${{ needs.generate_version.outputs.short_hash }}.${{ needs.generate_version.outputs.commit_timestamp }}"
+          # Human-readable name with all key details
+          name: "Dev Build ${{ needs.generate_version.outputs.base_version }} (Commit ${{ needs.generate_version.outputs.short_hash }}) - ${{ needs.generate_version.outputs.commit_timestamp }}"
+          
+          body: "This is an auto-generated development release created from commit hash `${{ needs.generate_version.outputs.long_hash }}`. Version: `${{ needs.generate_version.outputs.version }}`"
+          commit: "${{ needs.generate_version.outputs.long_hash }}"
+          allowUpdates: true
+          prerelease: true
