@@ -50,7 +50,6 @@ Development releases can be found in the project release history
 
 
 ## **Quick Note:** 
-Windows and macOS users, see the manual installation guide. macOS users can alternatively use the [DMG](../../releases) for a GUI-based install.
 
 
 ## Description
